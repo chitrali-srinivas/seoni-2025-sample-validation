@@ -1,0 +1,7 @@
+# Local demo data (farmer names, plot shapes) — never commit or publish
+web/demo/*.json
+web/demo/villages/
+
+node_modules/
+.env
+.DS_Store

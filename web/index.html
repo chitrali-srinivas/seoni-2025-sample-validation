@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Seoni Plot Validation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <script>
+    // Local demo backend (no Supabase needed) when ?demo is in the URL or Supabase isn't configured yet
+    (function () {
+      var c = window.APP_CONFIG || {};
+      if (/[?&]demo\b/.test(location.search) || !c.SUPABASE_URL || /YOUR-/.test(c.SUPABASE_URL)) {
+        document.write('<script src="demo/demo-backend.js"><\/script>');
+      }
+    })();
+  </script>
+</head>
+<body>
+  <!-- Sign in -->
+  <div id="login" class="overlay hidden">
+    <form id="login-form" class="card login-card">
+      <h1>Seoni K25 · Plot validation</h1>
+      <p class="muted">Sign in with your reviewer account.</p>
+      <label>Email<input type="email" id="login-email" autocomplete="username" required /></label>
+      <label>Password<input type="password" id="login-password" autocomplete="current-password" required /></label>
+      <button type="submit" class="btn primary" id="login-btn">Sign in</button>
+      <p id="login-error" class="error"></p>
+    </form>
+  </div>
+
+  <!-- Setup message when config.js is missing / unfilled -->
+  <div id="setup" class="overlay hidden">
+    <div class="card login-card">
+      <h1>Configuration needed</h1>
+      <p>Copy <code>web/config.example.js</code> to <code>web/config.js</code> and fill in the Supabase URL, anon key and Google Maps API key.</p>
+      <p id="setup-missing" class="error"></p>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">Seoni K25 <span>Plot validation</span></div>
+    <div class="top-filters">
+      <div class="dropdown" id="village-picker">
+        <button type="button" class="btn" id="village-btn">Select villages ▾</button>
+        <div class="menu village-menu hidden" id="village-menu">
+          <input type="search" id="village-search" placeholder="Filter villages…" />
+          <div class="row between small village-tools">
+            <span class="muted">plots · samples pending</span>
+            <button type="button" class="link" id="village-clear">Clear</button>
+          </div>
+          <div class="village-list" id="village-list"></div>
+          <div class="row between village-foot">
+            <span class="small" id="village-total"></span>
+            <button type="button" class="btn primary" id="village-apply">Load</button>
+          </div>
+        </div>
+      </div>
+      <div class="search">
+        <input id="f-search" type="search" placeholder="Search farmer, plot id, sample code…" />
+      </div>
+    </div>
+    <div class="top-right">
+      <div class="dropdown">
+        <button class="btn ghost" id="export-btn">Export ▾</button>
+        <div class="menu hidden" id="export-menu">
+          <button data-export="treatment_samples">Treatment samples sheet (with answers)</button>
+          <button data-export="control_samples">Control samples sheet (with answers)</button>
+          <button data-export="v_samples">All samples, one row per sample</button>
+          <button data-export="v_review_queue">Review queue (all units)</button>
+        </div>
+      </div>
+      <span id="user-email" class="muted small"></span>
+      <button class="btn ghost" id="signout-btn">Sign out</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- Left: layers + queue -->
+    <aside class="sidebar">
+      <section class="panel-block">
+        <h3>Layers</h3>
+        <div class="layer-list" id="layer-list"></div>
+        <div class="row gap small">
+          <span class="muted">Colour plots by</span>
+          <div class="seg" id="color-mode">
+            <button data-mode="type" class="on">Type</button>
+            <button data-mode="status">Review</button>
+          </div>
+        </div>
+        <p class="muted small" id="zoom-hint"></p>
+      </section>
+
+      <section class="panel-block">
+        <div class="row between">
+          <h3>Samples to verify</h3>
+          <div class="seg" id="progress-scope">
+            <button data-scope="loaded" class="on">Loaded</button>
+            <button data-scope="all">All villages</button>
+          </div>
+        </div>
+        <div id="sample-progress"></div>
+      </section>
+
+      <section class="panel-block queue-block">
+        <div class="row between">
+          <h3>Review queue</h3>
+          <span class="muted small" id="queue-count"></span>
+        </div>
+        <div class="chips" id="f-status">
+          <button data-v="all" class="on">All</button>
+          <button data-v="pending">Pending</button>
+          <button data-v="partial">Partial</button>
+          <button data-v="done">Done</button>
+          <button data-v="no">Invalid</button>
+        </div>
+        <div class="chips" id="f-auto">
+          <button data-v="all" class="on">Any check</button>
+          <button data-v="flagged">⚠ System suggests invalid</button>
+          <button data-v="clean">Clean</button>
+        </div>
+        <div class="progress"><div id="progress-bar"></div></div>
+        <ul class="queue" id="queue"></ul>
+      </section>
+    </aside>
+
+    <!-- Center: map -->
+    <section class="map-wrap">
+      <div id="map"></div>
+      <div class="map-status" id="map-status"></div>
+      <div class="map-loading hidden" id="map-loading">Loading plots…</div>
+      <div class="map-prompt" id="map-prompt">
+        <b>Choose villages to load</b>
+        <span>Use <em>Select villages</em> above or click a village marker on the map. Only the chosen villages’ plots and samples are loaded.</span>
+      </div>
+    </section>
+
+    <!-- Right: review form -->
+    <aside class="review" id="review">
+      <div class="empty" id="review-empty">
+        <h2>Select a plot</h2>
+        <p class="muted">Pick a farmer from the review queue, or click a plot or sample on the map. For each of the farmer’s pre and EOY samples (treatment and control), answer one question: is this sample valid? The plots are shown for context, and the system suggests an answer from where each sample was picked.</p>
+      </div>
+      <form id="review-form" class="hidden" autocomplete="off">
+        <div class="review-head" id="review-head"></div>
+        <div id="sections"></div>
+        <div class="review-actions">
+          <span class="muted small" id="save-state"></span>
+          <button type="button" class="btn ghost" id="zoom-btn">Zoom to unit</button>
+          <button type="submit" class="btn" id="save-btn">Save</button>
+          <button type="button" class="btn primary" id="save-next-btn">Save &amp; next →</button>
+        </div>
+      </form>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>
