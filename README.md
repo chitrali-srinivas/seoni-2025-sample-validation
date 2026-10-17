@@ -7,6 +7,8 @@ One map, all layers, one review form. For every sample row (treatment and contro
 | Is the snake pattern visible in the background (of that plot)? | `snake_visible` |
 | Is the pre sample valid? | `pre_sample_valid` |
 | Is the EOY sample valid? | `eoy_sample_valid` |
+| Is the snake pattern visible on Google Maps imagery? | `snake_visible_google` |
+| Snake pattern detected by ML on Esri imagery? (automatic) | `snake_ml_esri` |
 
 Only `seoni.treatment_samples` and `seoni.control_samples` get these columns (empty = not answered). Plot tables hold sheet data only. Everything lives in its own schema, `seoni`, so existing tables in the project are never touched, and the SQL never drops anything.
 
@@ -23,6 +25,20 @@ scripts/load-data.mjs              optional CLI loader (alternative to the CSV i
 
 The system suggests valid / invalid for each pre and EOY sample from where it was picked. A treatment sample outside its own plot or inside a control plot is suggested invalid; a control sample outside its own control plot or inside a treatment plot likewise. The snake question is a visual check, so it has no suggestion. The **Samples to verify** panel shows pending / valid / invalid counts per sample type for the loaded villages or for all villages.
 
+## Map imagery
+
+The map-type menu (top right of the map) offers Google **Satellite / Hybrid / Map**, **Esri** (Esri World Imagery, current) and **Esri Wayback**. Wayback has a date picker covering Esri's archived imagery releases, so you can check a plot on imagery captured after its deployment. Esri imagery over Seoni goes up to zoom 18 (~0.6 m per pixel). The Esri credit is shown whenever an Esri layer is on.
+
+## Snake detector (`web/snake-detector.js`)
+
+When a reviewer opens a farmer, the page fetches Esri World Imagery for the treatment plot and the control plot and looks for long, curving dark strokes inside each outline. It ignores straight strokes (field edges, roads) and tree crowns, which it recognises as dark patches wider than ~6 m. The verdict is saved straight to `snake_ml_esri` on the sample row:
+- **Yes / No**, shown with its reason (e.g. "1 curving stroke, ~48 m");
+- **Unclear** when the imagery is cloudy or missing; nothing is saved then.
+
+It is a hand-tuned image-analysis rule, not a trained network: there were no labelled examples to train on. On 52 Seoni plots labelled by eye it caught 6 of 7 snake plots, with 5 false alarms in 41 plain plots. Treat it as a pointer. Once reviewers have answered `snake_visible` / `snake_visible_google` for a few hundred plots, those answers can recalibrate the thresholds (`PARAMS` at the top of the file) or train a proper model.
+
+Google imagery is not analysed: the Google Maps Platform terms prohibit extracting map imagery or using it for automated analysis, and the tiles can't be read by page code anyway. The Google question is answered by the reviewer.
+
 ## Supabase setup
 
 1. **SQL editor → run `supabase/001_schema.sql`.** It creates schema `seoni` and the tables `treatment_plots`, `treatment_samples`, `control_plots` and `control_samples`. Their columns are named exactly like your CSV headers.
@@ -35,7 +51,7 @@ The system suggests valid / invalid for each pre and EOY sample from where it wa
    | `Seoni Sample plots - Control_sampled_Plots.csv` | `control_samples` |
 
    Map shapes are filled in automatically on import. Unclosed polygon rings in the sheets are closed by the database.
-3. **SQL editor → run `supabase/002_checks_and_api.sql`.** It builds the spatial checks from the imported rows. If you re-import later, run `select seoni.refresh_checks();`.
+3. **SQL editor → run `supabase/002_checks_and_api.sql`, then `supabase/003_snake_google_and_ml.sql`** (adds the two snake columns). It builds the spatial checks from the imported rows. If you re-import later, run `select seoni.refresh_checks();`.
 4. **Project Settings → Data API → Exposed schemas → add `seoni`.** The page reaches the tables through the API.
 5. **Authentication:** turn off public sign-ups and add each reviewer under Users → *Add user*. Only signed-in users can read data, and they can change only the three answer columns.
 6. **`web/config.js`:** fill in `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `GOOGLE_MAPS_API_KEY`. `SUPABASE_SCHEMA` defaults to `seoni`.

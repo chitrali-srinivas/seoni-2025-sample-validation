@@ -19,7 +19,7 @@
   ANS.treatment_samples = ANS.treatment_samples || {};
   ANS.control_samples = ANS.control_samples || {};
   const persist = () => { try { localStorage.setItem(STORE, JSON.stringify(ANS)); } catch {} };
-  const blank = { pre_sample_valid: null, eoy_sample_valid: null, snake_visible: null };
+  const blank = { pre_sample_valid: null, eoy_sample_valid: null, snake_visible: null, snake_visible_google: null, snake_ml_esri: null };
   const treatmentRow = (id) => ({ ...M.treatment_samples[id].row, ...blank, ...ANS.treatment_samples[id] });
   const controlRow = (id) => ({ ...M.control_samples[id].row, ...blank, ...ANS.control_samples[id] });
   const controlVillage = (id) => M.control_plots[id]?.checks.village_name || M.control_samples[id]?.row.village_name;
@@ -74,8 +74,8 @@
     return plotById.get(id) || null;
   }
   const status = (r) => {
-    const n = [r.pre_sample_valid, r.eoy_sample_valid, r.snake_visible].filter(Boolean).length;
-    return n === 0 ? 'pending' : n === 3 ? 'done' : 'partial';
+    const n = [r.pre_sample_valid, r.eoy_sample_valid, r.snake_visible, r.snake_visible_google].filter(Boolean).length;
+    return n === 0 ? 'pending' : n === 4 ? 'done' : 'partial';
   };
 
   function queue() {
@@ -199,8 +199,9 @@
     save_answers: ({ p }) => {
       for (const r of p) {
         const src = { treatment_samples: M.treatment_samples, control_samples: M.control_samples }[r.table];
-        if (!src || !src[r.id] || !['pre', 'eoy', 'snake'].includes(r.question)) throw new Error(`${r.table} ${r.id} (${r.question}) not found`);
-        const col = r.question === 'snake' ? 'snake_visible' : `${r.question}_sample_valid`;
+        const cols = { snake: 'snake_visible', snake_google: 'snake_visible_google', snake_ml_esri: 'snake_ml_esri', pre: 'pre_sample_valid', eoy: 'eoy_sample_valid' };
+        if (!src || !src[r.id] || !cols[r.question]) throw new Error(`${r.table} ${r.id} (${r.question}) not found`);
+        const col = cols[r.question];
         ANS[r.table][r.id] = { ...ANS[r.table][r.id], [col]: r.value || null };
       }
       persist();

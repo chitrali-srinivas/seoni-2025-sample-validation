@@ -27,6 +27,12 @@ const COLORS = {
 };
 const DIAMOND = 'M 0 -6 L 6 0 L 0 6 L -6 0 Z';
 
+// Extra imagery sources (both serve tiles up to zoom 18 over Seoni)
+const ESRI_IMAGERY = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const ESRI_WAYBACK = 'https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/{r}/{z}/{y}/{x}';
+const ESRI_WAYBACK_CONFIG = 'https://s3-us-west-2.amazonaws.com/config.maptiles.arcgis.com/waybackconfig.json';
+const ESRI_ATTRIBUTION = 'Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community';
+
 const VILLAGE_KEY = 'seoni-selected-villages';
 
 const LAYERS = [
@@ -41,8 +47,9 @@ const LAYERS = [
   { id: 'conflicts', label: 'Outline overlaps in red', swatch: 'poly', color: COLORS.conflict, on: true, virtual: true },
 ];
 
-// Three questions per sample row (treatment_samples / control_samples), each stored in its
-// own column on that row: snake_visible, pre_sample_valid, eoy_sample_valid.
+// Questions per sample row (treatment_samples / control_samples), each stored in its own
+// column on that row: snake_visible, snake_visible_google, pre_sample_valid, eoy_sample_valid,
+// plus snake_ml_esri, filled in automatically by the Esri snake detector (snake-detector.js).
 // Plot facts are shown as read-only context; the plot rules feed the system suggestion.
 const SECTIONS = [
   {
@@ -62,6 +69,12 @@ const SECTIONS = [
         key: 'snake',
         label: (u) => `Is the snake pattern visible in the background of treatment plot <b>${esc(u.treatment_sample.row.plot_id)}</b>?`,
       },
+      {
+        key: 'snake_google',
+        label: () => 'Is the snake pattern visible on Google Maps imagery?',
+        manualHint: 'Look with the map on Satellite or Hybrid (Google)',
+      },
+      { key: 'snake_ml_esri', ml: true, plot: (u) => u.treatment_plot, label: () => 'Snake pattern detected by ML on Esri imagery?' },
       {
         key: 'pre',
         label: (u) => `Is the pre sample <b>${esc(u.treatment_sample.row.pre)}</b> valid?`,
@@ -89,6 +102,12 @@ const SECTIONS = [
         label: (u) => `Is the snake pattern visible in the background of control plot <b>${esc(u.control_sample.row.control_plot_id)}</b>?`,
       },
       {
+        key: 'snake_google',
+        label: () => 'Is the snake pattern visible on Google Maps imagery?',
+        manualHint: 'Look with the map on Satellite or Hybrid (Google)',
+      },
+      { key: 'snake_ml_esri', ml: true, plot: (u) => u.control_plot, label: () => 'Snake pattern detected by ML on Esri imagery?' },
+      {
         key: 'pre',
         label: (u) => `Is the pre sample <b>${esc(u.control_sample.row.pre_ids)}</b> valid?`,
         auto: (u) => controlSampleAuto(u.control_sample.checks, 'pre'),
@@ -103,7 +122,8 @@ const SECTIONS = [
 ];
 
 // Column on the sample row that holds a question's answer
-const answerColumn = (key) => (key === 'snake' ? 'snake_visible' : `${key}_sample_valid`);
+const ANSWER_COLUMNS_BY_KEY = { snake: 'snake_visible', snake_google: 'snake_visible_google', snake_ml_esri: 'snake_ml_esri' };
+const answerColumn = (key) => ANSWER_COLUMNS_BY_KEY[key] || `${key}_sample_valid`;
 
 // Treatment sample suggestion: valid when inside its own treatment plot and in no control plot
 function treatmentSampleAuto(k, w) {
@@ -207,6 +227,7 @@ const S = {
   answers: {},
   dirty: new Set(), // '<section>:<snake|pre|eoy>' with unsaved changes
   progressScope: 'loaded',
+  ml: {}, // section key -> detector result for the open unit
   selSeq: 0,
   saving: false,
 };
@@ -468,8 +489,13 @@ function initMap() {
     streetViewControl: false,
     scaleControl: true,
     fullscreenControl: true,
-    mapTypeControlOptions: { position: google.maps.ControlPosition.TOP_RIGHT },
+    mapTypeControlOptions: {
+      position: google.maps.ControlPosition.TOP_RIGHT,
+      style: google.maps.MapTypeControlStyle.DROPDOWN_MENU,
+      mapTypeIds: ['hybrid', 'satellite', 'roadmap', 'esri', 'wayback'],
+    },
   });
+  initImagerySources();
 
   for (const l of LAYERS) {
     if (l.virtual) continue;
@@ -501,6 +527,60 @@ function initMap() {
 
   syncLayerVisibility();
   S.map.addListener('idle', syncLayerVisibility);
+}
+
+// Esri World Imagery (latest) and Esri Wayback (pick an archived capture date)
+function esriTiles(name, urlFor) {
+  return new google.maps.ImageMapType({
+    name,
+    alt: ESRI_ATTRIBUTION,
+    tileSize: new google.maps.Size(256, 256),
+    maxZoom: 18,
+    getTileUrl: (c, z) => {
+      const n = 2 ** z;
+      return urlFor(z, ((c.x % n) + n) % n, c.y);
+    },
+  });
+}
+
+function initImagerySources() {
+  S.map.mapTypes.set('esri', esriTiles('Esri', (z, x, y) => ESRI_IMAGERY.replace('{z}', z).replace('{y}', y).replace('{x}', x)));
+  S.map.mapTypes.set('wayback', esriTiles('Esri Wayback', (z, x, y) => {
+    const r = S.waybackRelease || 'latest';
+    return r === 'latest'
+      ? ESRI_IMAGERY.replace('{z}', z).replace('{y}', y).replace('{x}', x)
+      : ESRI_WAYBACK.replace('{r}', r).replace('{z}', z).replace('{y}', y).replace('{x}', x);
+  }));
+
+  const select = $('#wayback-release');
+  select.addEventListener('change', () => {
+    S.waybackRelease = select.value;
+    // swapping the registered type makes the map fetch the new date's tiles
+    S.map.mapTypes.set('wayback', S.map.mapTypes.get('wayback'));
+    S.map.setMapTypeId('esri');
+    S.map.setMapTypeId('wayback');
+  });
+  S.map.addListener('maptypeid_changed', async () => {
+    const id = S.map.getMapTypeId();
+    const esri = id === 'esri' || id === 'wayback';
+    $('#imagery-credit').textContent = esri ? ESRI_ATTRIBUTION : '';
+    select.classList.toggle('hidden', id !== 'wayback');
+    if (id === 'wayback' && !select.options.length) await loadWaybackReleases(select);
+  });
+}
+
+async function loadWaybackReleases(select) {
+  try {
+    const cfg = await (await fetch(ESRI_WAYBACK_CONFIG)).json();
+    const releases = Object.entries(cfg)
+      .map(([num, r]) => ({ num, date: (r.itemTitle.match(/\d{4}-\d{2}-\d{2}/) || [''])[0] }))
+      .filter((r) => r.date)
+      .sort((a, b) => b.date.localeCompare(a.date));
+    select.innerHTML = releases.map((r) => `<option value="${r.num}">Esri imagery release ${r.date}</option>`).join('');
+    S.waybackRelease = releases[0]?.num;
+  } catch (err) {
+    toast(`Could not load Esri Wayback dates: ${err.message}`, true);
+  }
 }
 
 function syncLayerVisibility() {
@@ -1036,6 +1116,7 @@ async function selectUnit(sel, opts = {}) {
   drawSelection();
   if (!opts.noZoom) zoomToUnit();
   highlightActive();
+  runMlChecks(seq);
 
   // a unit opened by id / hash / farmer-plot button may sit in a village that isn't loaded yet
   const v = data.treatment_plot?.row.village_name || data.control_plot?.checks?.village_name;
@@ -1088,13 +1169,15 @@ function renderSection(def, u) {
 
   const a = S.answers[def.key];
   const hasAuto = def.questions.some((q) => q.auto);
-  const answered = def.questions.filter((q) => sec.row[answerColumn(q.key)]).length;
+  const manual = def.questions.filter((q) => !q.ml);
+  const answered = manual.filter((q) => sec.row[answerColumn(q.key)]).length;
 
   const qs = def.questions
     .map((q) => {
+      if (q.ml) return renderMlQuestion(def, q, u, sec);
       const ans = a[q.key];
       const auto = q.auto ? q.auto(u) : null;
-      let hint = '<div class="hint manual">Visual check on the satellite imagery</div>';
+      let hint = `<div class="hint manual">${q.manualHint || 'Visual check on the satellite imagery'}</div>`;
       if (auto) {
         const mismatch = ans && ans !== auto.v ? '<span class="mismatch">· differs from your answer</span>' : '';
         hint = `<div class="hint ${auto.v === 'yes' ? 'ok' : 'bad'}">${auto.v === 'yes' ? '✓' : '⚠'} System suggests <b>${auto.v === 'yes' ? 'VALID' : 'INVALID'}</b>: ${esc(auto.why)} ${mismatch}</div>`;
@@ -1114,14 +1197,75 @@ function renderSection(def, u) {
     .join('');
 
   return `<div class="section" data-section="${def.key}">
-    ${head(`<span class="ids">${esc(def.id(u))}</span><span class="saved">${answered} / ${def.questions.length} answered</span>`)}
+    ${head(`<span class="ids">${esc(def.id(u))}</span><span class="saved">${answered} / ${manual.length} answered</span>`)}
     <div class="facts">${def.facts(u)}</div>
     ${qs}
     ${hasAuto ? `<button type="button" class="apply-auto" data-apply="${def.key}">Fill unanswered samples with system suggestions</button>` : ''}
   </div>`;
 }
 
+function renderMlQuestion(def, q, u, sec) {
+  const r = S.ml[def.key];
+  const stored = sec.row[answerColumn(q.key)];
+  let chip, detail;
+  if (!q.plot(u)?.geometry) {
+    chip = '<span class="ml-chip unclear">Not available</span>';
+    detail = 'No plot outline to analyse';
+  } else if (!r || r.state === 'running') {
+    chip = '<span class="ml-chip running">Analysing…</span>';
+    detail = 'Reading Esri imagery inside the plot outline';
+  } else if (r.state === 'error') {
+    chip = '<span class="ml-chip unclear">Could not run</span>';
+    detail = esc(r.message);
+  } else {
+    const label = { yes: 'Yes', no: 'No', unclear: 'Unclear' }[r.verdict];
+    chip = `<span class="ml-chip ${r.verdict}">${label}</span>`;
+    detail = `${esc(r.reason)}${r.verdict === 'unclear' ? ' · not saved' : stored === r.verdict ? ' · saved' : ''}`;
+  }
+  return `<div class="q">
+    <div class="q-label">${q.label(u)}</div>
+    ${chip}
+    <div class="hint manual">${detail} · <button type="button" class="apply-auto" data-esri-view>View Esri imagery</button></div>
+  </div>`;
+}
+
+// Run the Esri snake detector for each sample section of the open unit and save the verdict
+// onto the sample row (it is model output, so it is saved straight away, not via the form).
+async function runMlChecks(seq) {
+  if (!window.SnakeDetector) return;
+  const u = S.unit;
+  S.ml = {};
+  await Promise.all(
+    SECTIONS.map(async (def) => {
+      const q = def.questions.find((x) => x.ml);
+      const sec = u[def.key];
+      const geom = q && sec && q.plot(u)?.geometry;
+      if (!geom) return;
+      S.ml[def.key] = { state: 'running' };
+      let result;
+      try {
+        result = { state: 'done', ...(await window.SnakeDetector.detectSnakeOnEsri(geom)) };
+      } catch (err) {
+        result = { state: 'error', message: err.message || String(err) };
+      }
+      if (seq !== S.selSeq) return;
+      S.ml[def.key] = result;
+      const col = answerColumn(q.key);
+      if (result.state === 'done' && result.verdict !== 'unclear' && sec.row[col] !== result.verdict) {
+        const { error } = await S.sb.rpc('save_answers', { p: [{ table: def.table, id: def.id(u), question: q.key, value: result.verdict }] });
+        if (!error && seq === S.selSeq) sec.row[col] = result.verdict;
+        if (error) S.ml[def.key] = { ...result, reason: `${result.reason} · saving failed: ${error.message}` };
+      }
+      if (seq === S.selSeq) rerenderSection(def.key);
+    }),
+  );
+}
+
 function onSectionClick(e) {
+  if (e.target.closest('[data-esri-view]')) {
+    S.map.setMapTypeId('esri');
+    return;
+  }
   const btn = e.target.closest('.yn button');
   if (btn) {
     const { section, q } = btn.parentElement.dataset;
@@ -1181,7 +1325,7 @@ async function save(next) {
   for (const def of SECTIONS) {
     if (!u[def.key]) continue;
     for (const q of def.questions) {
-      if (!S.dirty.has(`${def.key}:${q.key}`)) continue;
+      if (q.ml || !S.dirty.has(`${def.key}:${q.key}`)) continue;
       payload.push({ table: def.table, id: def.id(u), question: q.key, value: S.answers[def.key][q.key] });
     }
   }
@@ -1217,7 +1361,7 @@ function nextQueueRow() {
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
-const ANSWER_COLUMNS = 'pre_sample_valid,eoy_sample_valid,snake_visible';
+const ANSWER_COLUMNS = 'pre_sample_valid,eoy_sample_valid,snake_visible,snake_visible_google,snake_ml_esri';
 // Sample sheets are exported in their original column order, followed by the answer columns
 const EXPORTS = {
   treatment_samples: { order: 'plot_id', columns: `deployment_id,plot_id,village_name,farmer_id,farmer_name,crusher_code,deployment_ids,n_deployments,pre,pre_location,eoy,eoy_location,${ANSWER_COLUMNS}` },

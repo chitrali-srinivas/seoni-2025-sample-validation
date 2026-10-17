@@ -131,6 +131,8 @@
     <section class="map-wrap">
       <div id="map"></div>
       <div class="map-status" id="map-status"></div>
+      <select id="wayback-release" class="map-select hidden" title="Esri Wayback capture release"></select>
+      <div class="imagery-credit" id="imagery-credit"></div>
       <div class="map-loading hidden" id="map-loading">Loading plots…</div>
       <div class="map-prompt" id="map-prompt">
         <b>Choose villages to load</b>
@@ -158,6 +160,7 @@
   </main>
 
   <div id="toast" class="toast hidden"></div>
+  <script src="snake-detector.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

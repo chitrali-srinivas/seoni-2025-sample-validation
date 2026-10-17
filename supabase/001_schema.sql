@@ -11,12 +11,14 @@
 --     Deployment_Samples+plots.csv → seoni.treatment_samples
 --     control_plot.csv             → seoni.control_plots
 --     Control_sampled_Plots.csv    → seoni.control_samples
--- then run 002_checks_and_api.sql.
+-- then run 002_checks_and_api.sql and 003_snake_google_and_ml.sql.
 --
 -- Columns that collect reviewer answers (only on the two sample tables):
 --     pre_sample_valid   is the pre sample valid?                       yes / no
 --     eoy_sample_valid   is the EOY sample valid?                       yes / no
 --     snake_visible      is the snake pattern visible in the background? yes / no
+--     snake_visible_google  is the snake pattern visible on Google Maps?  yes / no
+--     snake_ml_esri      snake detected by the ML check on Esri imagery   yes / no (automatic)
 -- (empty = not answered yet)
 -- =====================================================================
 
@@ -113,7 +115,9 @@ create table if not exists seoni.treatment_samples (
   eoy_geom         geometry(Point, 4326),
   pre_sample_valid text check (pre_sample_valid in ('yes', 'no')),
   eoy_sample_valid text check (eoy_sample_valid in ('yes', 'no')),
-  snake_visible    text check (snake_visible in ('yes', 'no'))
+  snake_visible    text check (snake_visible in ('yes', 'no')),
+  snake_visible_google text check (snake_visible_google in ('yes', 'no')),
+  snake_ml_esri    text check (snake_ml_esri in ('yes', 'no'))
 );
 create index if not exists treatment_samples_pre_idx    on seoni.treatment_samples using gist (pre_geom);
 create index if not exists treatment_samples_eoy_idx    on seoni.treatment_samples using gist (eoy_geom);
@@ -155,7 +159,9 @@ create table if not exists seoni.control_samples (
   eoy_geom             geometry(Point, 4326),
   pre_sample_valid     text check (pre_sample_valid in ('yes', 'no')),
   eoy_sample_valid     text check (eoy_sample_valid in ('yes', 'no')),
-  snake_visible        text check (snake_visible in ('yes', 'no'))
+  snake_visible        text check (snake_visible in ('yes', 'no')),
+  snake_visible_google text check (snake_visible_google in ('yes', 'no')),
+  snake_ml_esri        text check (snake_ml_esri in ('yes', 'no'))
 );
 create index if not exists control_samples_pre_idx on seoni.control_samples using gist (pre_geom);
 create index if not exists control_samples_eoy_idx on seoni.control_samples using gist (eoy_geom);
@@ -198,7 +204,7 @@ create or replace trigger trg_geom before insert or update of control_pre_locati
 
 -- ---------------------------------------------------------------------
 -- Access: signed-in reviewers can read everything and can change only the
--- three answer columns on the sample tables. Not reachable without sign-in.
+-- answer columns on the sample tables. Not reachable without sign-in.
 -- (Dashboard imports and the service-role key are not limited by this.)
 -- ---------------------------------------------------------------------
 grant usage on schema seoni to authenticated, service_role;
@@ -206,7 +212,7 @@ grant select on seoni.treatment_plots, seoni.treatment_samples,
                 seoni.control_plots, seoni.control_samples to authenticated;
 grant all on seoni.treatment_plots, seoni.treatment_samples,
              seoni.control_plots, seoni.control_samples to service_role;
-grant update (pre_sample_valid, eoy_sample_valid, snake_visible)
+grant update (pre_sample_valid, eoy_sample_valid, snake_visible, snake_visible_google, snake_ml_esri)
   on seoni.treatment_samples, seoni.control_samples to authenticated;
 
 alter table seoni.treatment_plots   enable row level security;
